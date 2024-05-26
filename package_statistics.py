@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from operator import itemgetter
 from typing import DefaultDict, Iterator, Union
@@ -89,7 +90,6 @@ def read_contents_file(args) -> Iterator[str]:
             )
             sys.exit(2)
         return read_gzip_contents(local_filename)
-
     else:
         content_bytes = download_contents_file(args.architecture, args.base_url)
         if args.save_file_locally:
@@ -97,18 +97,27 @@ def read_contents_file(args) -> Iterator[str]:
         return read_gzip_contents(content_bytes)
 
 
-def parse_contents(lines: Iterator[str]) -> DefaultDict[str, int]:
-    """Parses the Contents file and counts the number of files for each package"""
-    logging.info("Parsing the Contents file")
-    # defaultdict(int) initializes the default value of new keys to 0
-    package_counter: DefaultDict[str, int] = defaultdict(int)
-    for line in lines:
-        if not line:
-            continue
-        # split the lines only once from the last whitespace
+def parse_line(line: str, package_counter: DefaultDict[str, int]) -> None:
+    """Parses a single line of the Contents file"""
+    if not line.strip():
+        return
+    try:
         file_path, package_names = line.rsplit(maxsplit=1)
         for package_name in package_names.strip().split(","):
             package_counter[package_name] += 1
+    except ValueError:
+        logging.error(f"Failed to parse line: {line.strip()}")
+
+
+def parse_contents(lines: Iterator[str]) -> DefaultDict[str, int]:
+    """Parses the Contents file and counts the number of files for each package using multithreading"""
+    logging.info("Parsing the Contents file")
+    package_counter: DefaultDict[str, int] = defaultdict(int)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(parse_line, line, package_counter) for line in lines]
+        for future in as_completed(futures):
+            future.result()  # To raise any exceptions that occurred during execution
 
     logging.info("Completed parsing the Contents file")
     return package_counter
