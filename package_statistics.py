@@ -8,7 +8,7 @@ import sys
 from collections import defaultdict
 from io import BytesIO
 from operator import itemgetter
-from typing import DefaultDict, Union
+from typing import DefaultDict, Iterator, Union
 
 import requests
 
@@ -29,16 +29,19 @@ def setup_logging(logfile: str) -> None:
     )
 
 
-def read_gzip_contents(source: Union[str, bytes]) -> str:
-    """Reads a gzip file from a file path or bytes, and returns the contents"""
+def read_gzip_contents(source: Union[str, bytes]) -> Iterator[str]:
+    """Reads and decompresses a gzip file from a file path or bytes line by line"""
     logging.info("Reading gzip contents")
     try:
         if isinstance(source, str):
             with gzip.open(source, "rt") as f:
-                contents = f.read()
+                for line in f:
+                    yield line
         else:
             with gzip.open(BytesIO(source), "rt") as f:
-                contents = f.read()
+                for line in f:
+                    yield line
+
     except gzip.BadGzipFile as e:
         logging.error(f"Bad gzip file {e}")
         sys.exit(1)
@@ -47,7 +50,6 @@ def read_gzip_contents(source: Union[str, bytes]) -> str:
         sys.exit(1)
 
     logging.info("Successfully read the gzip contents")
-    return contents
 
 
 def download_contents_file(architecture: str, base_url: str) -> bytes:
@@ -55,7 +57,7 @@ def download_contents_file(architecture: str, base_url: str) -> bytes:
     url = f"{base_url}/dists/stable/main/Contents-{architecture}.gz"
     logging.info(f"Downloading Contents file from {url}")
     try:
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, timeout=30, stream=True)
         response.raise_for_status()
     except requests.RequestException as e:
         logging.error(f"Failed to download Contents file: {e}")
@@ -72,7 +74,7 @@ def save_contents_file(file_path: str, content: bytes) -> None:
     logging.info(f"Saved downloaded Contents file as {file_path}")
 
 
-def read_contents_file(args) -> str:
+def read_contents_file(args) -> Iterator[str]:
     """Reads the contents file either from a local cache or by downloading it from the Debian mirror."""
     local_filename = f"Contents-{args.architecture}.gz"
     # If --use-cache is given, check the local gzip file, read it if it exists
@@ -86,30 +88,27 @@ def read_contents_file(args) -> str:
                 "Please run the command with `--save-file-locally` parameter. Exiting..."
             )
             sys.exit(2)
-        contents = read_gzip_contents(local_filename)
+        return read_gzip_contents(local_filename)
+
     else:
         content_bytes = download_contents_file(args.architecture, args.base_url)
         if args.save_file_locally:
             save_contents_file(local_filename, content_bytes)
-        contents = read_gzip_contents(content_bytes)
-
-    return contents
+        return read_gzip_contents(content_bytes)
 
 
-def parse_contents(contents: str) -> DefaultDict[str, int]:
+def parse_contents(lines: Iterator[str]) -> DefaultDict[str, int]:
     """Parses the Contents file and counts the number of files for each package"""
     logging.info("Parsing the Contents file")
     # defaultdict(int) initializes the default value of new keys to 0
     package_counter: DefaultDict[str, int] = defaultdict(int)
-    # split the lines once from the last whitespace, if the lines are non-empty
-    file_to_package = [
-        line.rsplit(maxsplit=1) for line in contents.splitlines() if line
-    ]
-
-    for files, package_list in file_to_package:
-        # There can be multiple packages associated with a filepath. Packages are separated by a comma.
-        for package in package_list.split(","):
-            package_counter[package] += 1
+    for line in lines:
+        if not line:
+            continue
+        # split the lines only once from the last whitespace
+        file_path, package_names = line.rsplit(maxsplit=1)
+        for package_name in package_names.strip().split(","):
+            package_counter[package_name] += 1
 
     logging.info("Completed parsing the Contents file")
     return package_counter
@@ -157,10 +156,10 @@ def main():
     # Set up logging
     setup_logging(args.logfile)
 
-    # Fetch the contents file and read the contents
-    contents = read_contents_file(args)
+    # Fetch the contents file and read the contents by yielding line by line
+    lines = read_contents_file(args)
     # Parse the contents file and count filepaths for the packages
-    package_counter = parse_contents(contents)
+    package_counter = parse_contents(lines)
     # Sort the package_counter dictionary from most files to the least and extract the top 10
     top_packages = sorted(package_counter.items(), key=itemgetter(1), reverse=True)[:10]
 

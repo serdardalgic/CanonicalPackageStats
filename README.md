@@ -116,3 +116,39 @@ contents = read_gzip_contents(content_bytes)
 # and
 package_counter = parse_contents(contents)
 ```
+
+### Using generators and yielding gzip file line by line
+
+In the initial implementation, I didn't prioritize processsing the gzip file faster and more efficiently. Now is the time to optimize the code. Luckily, the memray output highlights where the `big chunks` of data are. Checking those two functions will reduce the memory usage and improve the script's performance.
+
+Downloading and reading the gzip file is a significant bottleneck when it comes to script's performace. Additionally, more memory-efficient data structures can be used by utilizing generators and iterators to reduce memory consumption during content parsing.
+
+I changed the `read_gzip_contents` function to return an iterator instead of the entire file content, now yielding lines one by one. In addition to this change, when the user is not using a local file, the `requests.get` function in `download_contents_file` now includes the `stream=True` parameter to handle large downloads more efficiently.
+
+Another change I added is updating the `parse_contents` function to process the Contents file line by line using an iterator, instead of parsing the whole content at once.
+
+Here are the benchmark results:
+```bash
+$> ./package_statistics.py all
+...
+<Log Info>
+...
+2024-05-26 23:38:08,811 [INFO] main executed 5 times with an average time of 11.2538 seconds
+```
+More than 10 seconds faster with the scenario where we download the Contents file.
+
+How about using the cache?
+```bash
+$> ./package_statistics.py --use-cache all
+...
+<Log Info>
+...
+2024-05-26 23:41:15,608 [INFO] main executed 5 times with an average time of 2.9649 seconds
+```
+It's 3.5-4 seconds faster on average.
+
+Let's take a look at the flamegraphs from [memray-flamegraph-generators_and_yielding_second_phase.html](./memray-flamegraph-generators_and_yielding_second_phase.html). When I check the stats, the number of allocations increased vastly, to `(2038073)`. But the peak memory usage is now `72.6 MiB`.
+
+The code is already faster and using significantly less memory right now.
+
+Is there anything else I can do to run the code faster? I bet parsing the gzip content can be done in parallel. I'll investigate it in the next section.
