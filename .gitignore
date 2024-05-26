@@ -1,0 +1,6 @@
+# Ignore all Contents-*.gz files anywhere in this repository
+**Contents-*.gz
+# Ignore log and cache files
+*.log
+*.pyc
+__pycache__/
