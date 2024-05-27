@@ -121,7 +121,7 @@ package_counter = parse_contents(contents)
 
 In the initial implementation, I didn't prioritize processsing the gzip file faster and more efficiently. Now is the time to optimize the code. Luckily, the memray output highlights where the `big chunks` of data are. Checking those two functions will reduce the memory usage and improve the script's performance.
 
-Downloading and reading the gzip file is a significant bottleneck when it comes to script's performace. Additionally, more memory-efficient data structures can be used by utilizing generators and iterators to reduce memory consumption during content parsing.
+Downloading and reading the gzip file is a significant bottleneck when it comes to script's performance. Additionally, more memory-efficient data structures can be used by utilizing generators and iterators to reduce memory consumption during content parsing.
 
 I changed the `read_gzip_contents` function to return an iterator instead of the entire file content, now yielding lines one by one. In addition to this change, when the user is not using a local file, the `requests.get` function in `download_contents_file` now includes the `stream=True` parameter to handle large downloads more efficiently.
 
@@ -152,3 +152,29 @@ Let's take a look at the flamegraphs from [memray-flamegraph-generators_and_yiel
 The code is already faster and using significantly less memory right now.
 
 Is there anything else I can do to run the code faster? I bet parsing the gzip content can be done in parallel. I'll investigate it in the next section.
+
+### Trying Multithreading module
+
+First, I tried Multithreading with parsing the contents line by line. That was the slowest among all my tests: The `./package_statistics.py --use-cache all` command executed 5 times with an average time of 81.3441 seconds. See git commit `b0c63e3` in the `multithreading-try` branch for further details.
+
+Then, I implemented processing by chunks, which increased the speed vastly. Still, it wasn't as fast as regular processing approach with iterators and generators. I haven't seen any average runtime faster than 3.9 seconds. I've tried different chunk sizes and different number of threads, the result didn't improve.
+
+Due to the Global Interpreter Lock (GIL), multithreading is not as effective for CPU-bound tasks as it is for I/O-bound tasks. Even though parsing lines from a file might seem like an I/O-bound task, frequent updates to a shared data structure (like the package counter) can cause contention and synchronization overhead. This can significantly slow down multithreaded programs, especially when threads are competing to update the shared defaultdict.
+
+### Trying Multiprocessing module
+
+Multiprocessing example parsing the contents line by line wasn't as dramatic as the multithreading example, but it was still slower: The `./package_statistics.py --use-cache all` command 5 times with an average time of 9.2875 seconds. See git commit `1f3f7bc` in the `multiprocessing-try` branch for further details.
+
+Implementing chunks improved the performance of the code, but still it wasn't faster than 4 seconds in average. I've tried different chunk sizes and different number of CPUs, the result didn't improve.
+
+Multiprocessing can overcome the limitations of the GIL by using separate memory spaces for each process. However, this comes with its own overheads. Processes are heavier than threads, and managing inter-process communication (IPC) and memory can be expensive. In this case, the cost of spawning multiple processes, splitting the data into chunks, and aggregating the results can outweigh the benefits of parallel processing, leading to slower overall performance.
+
+## Summary:
+
+The regular processing implementation with iterators and generators is highly efficient for this type of task. It minimizes memory usage and avoids the overhead of context switching, synchronization, and IPC. By processing the data in a single pass and using efficient data structures, this approach leverages Python’s strengths and minimizes overhead, resulting in faster execution times.
+
+In this specific scenario, the regular processing approach with iterators and generators proves to be the most efficient due to its simplicity and the avoidance of the overheads associated with multithreading and multiprocessing. While multithreading and multiprocessing can offer performance improvements in certain contexts, the added complexity and overhead can sometimes negate these benefits, particularly for tasks that involve frequent updates to shared data structures or where the task is not sufficiently parallelizable.
+
+I mainly prioritized improving the performance of the code over testing the individual functions. Due to the lack of time and the unexpected complexity of concurrency testing, I couldn’t find the opportunity to write tests for the individual functions to validate their behavior. Although the code is modular and functions are broken down into basic parts, the lack of tests is a significant concern for me in this implementation. If I had more time to spend on this task, writing comprehensive tests would be my top priority.
+
+In total, the task took me 1.5 days on the weekend.
