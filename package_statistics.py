@@ -9,7 +9,7 @@ from collections import defaultdict
 from io import BytesIO
 from multiprocessing import Pool, cpu_count
 from operator import itemgetter
-from typing import DefaultDict, Iterator, Union
+from typing import DefaultDict, Iterator, List, Union
 
 import requests
 
@@ -97,26 +97,42 @@ def read_contents_file(args) -> Iterator[str]:
         return read_gzip_contents(content_bytes)
 
 
-def parse_line(line: str) -> DefaultDict[str, int]:
-    """Parses a single line of the Contents file"""
+def process_chunk(lines: List[str]) -> DefaultDict[str, int]:
+    """Processes a chunk of lines and returns the package count"""
     package_counter: DefaultDict[str, int] = defaultdict(int)
-    if not line:
-        return package_counter
-    file_path, package_names = line.rsplit(maxsplit=1)
-    for package_name in package_names.strip().split(","):
-        package_counter[package_name] += 1
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            file_path, package_names = line.rsplit(maxsplit=1)
+            for package_name in package_names.strip().split(","):
+                package_counter[package_name] += 1
+        except ValueError:
+            logging.error(f"Failed to parse line: {line.strip()}")
     return package_counter
 
 
-def parse_contents(lines: Iterator[str]) -> DefaultDict[str, int]:
+def parse_contents(
+    lines: Iterator[str], chunk_size: int = 1000
+) -> DefaultDict[str, int]:
     """Parses the Contents file and counts the number of files for each package using multiprocessing"""
     logging.info("Parsing the Contents file")
     # defaultdict(int) initializes the default value of new keys to 0
     package_counter: DefaultDict[str, int] = defaultdict(int)
+    chunks = []
+    current_chunk = []
+
+    for line in lines:
+        current_chunk.append(line)
+        if len(current_chunk) >= chunk_size:
+            chunks.append(current_chunk)
+            current_chunk = []
+
+    if current_chunk:
+        chunks.append(current_chunk)
 
     with Pool(cpu_count()) as pool:
-        # with Pool(6) as pool:
-        results = pool.map(parse_line, lines)
+        results = pool.map(process_chunk, chunks)
 
     for result in results:
         for package_name, count in result.items():
