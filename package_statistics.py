@@ -6,10 +6,10 @@ import logging
 import os
 import sys
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from operator import itemgetter
-from typing import DefaultDict, Iterator, Union
+from typing import DefaultDict, Iterator, List, Union
 
 import requests
 
@@ -97,27 +97,45 @@ def read_contents_file(args) -> Iterator[str]:
         return read_gzip_contents(content_bytes)
 
 
-def parse_line(line: str, package_counter: DefaultDict[str, int]) -> None:
-    """Parses a single line of the Contents file"""
-    if not line.strip():
-        return
-    try:
-        file_path, package_names = line.rsplit(maxsplit=1)
-        for package_name in package_names.strip().split(","):
-            package_counter[package_name] += 1
-    except ValueError:
-        logging.error(f"Failed to parse line: {line.strip()}")
+def process_chunk(lines: List[str]) -> DefaultDict[str, int]:
+    """Processes a chunk of lines and returns the package count"""
+    package_counter: DefaultDict[str, int] = defaultdict(int)
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            file_path, package_names = line.rsplit(maxsplit=1)
+            for package_name in package_names.strip().split(","):
+                package_counter[package_name] += 1
+        except ValueError:
+            logging.error(f"Failed to parse line: {line.strip()}")
+    return package_counter
 
 
-def parse_contents(lines: Iterator[str]) -> DefaultDict[str, int]:
+def parse_contents(
+    lines: Iterator[str], chunk_size: int = 1000
+) -> DefaultDict[str, int]:
     """Parses the Contents file and counts the number of files for each package using multithreading"""
     logging.info("Parsing the Contents file")
     package_counter: DefaultDict[str, int] = defaultdict(int)
+    chunks = []
+    current_chunk = []
+
+    for line in lines:
+        current_chunk.append(line)
+        if len(current_chunk) >= chunk_size:
+            chunks.append(current_chunk)
+            current_chunk = []
+
+    if current_chunk:
+        chunks.append(current_chunk)
 
     with ThreadPoolExecutor(max_workers=8) as executor:
-        futures = [executor.submit(parse_line, line, package_counter) for line in lines]
-        for future in as_completed(futures):
-            future.result()  # To raise any exceptions that occurred during execution
+        futures = [executor.submit(process_chunk, chunk) for chunk in chunks]
+        for future in futures:
+            result = future.result()
+            for package_name, count in result.items():
+                package_counter[package_name] += count
 
     logging.info("Completed parsing the Contents file")
     return package_counter
