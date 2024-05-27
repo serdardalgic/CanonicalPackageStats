@@ -7,6 +7,7 @@ import os
 import sys
 from collections import defaultdict
 from io import BytesIO
+from multiprocessing import Pool, cpu_count
 from operator import itemgetter
 from typing import DefaultDict, Iterator, Union
 
@@ -89,7 +90,6 @@ def read_contents_file(args) -> Iterator[str]:
             )
             sys.exit(2)
         return read_gzip_contents(local_filename)
-
     else:
         content_bytes = download_contents_file(args.architecture, args.base_url)
         if args.save_file_locally:
@@ -97,18 +97,30 @@ def read_contents_file(args) -> Iterator[str]:
         return read_gzip_contents(content_bytes)
 
 
+def parse_line(line: str) -> DefaultDict[str, int]:
+    """Parses a single line of the Contents file"""
+    package_counter: DefaultDict[str, int] = defaultdict(int)
+    if not line:
+        return package_counter
+    file_path, package_names = line.rsplit(maxsplit=1)
+    for package_name in package_names.strip().split(","):
+        package_counter[package_name] += 1
+    return package_counter
+
+
 def parse_contents(lines: Iterator[str]) -> DefaultDict[str, int]:
-    """Parses the Contents file and counts the number of files for each package"""
+    """Parses the Contents file and counts the number of files for each package using multiprocessing"""
     logging.info("Parsing the Contents file")
     # defaultdict(int) initializes the default value of new keys to 0
     package_counter: DefaultDict[str, int] = defaultdict(int)
-    for line in lines:
-        if not line:
-            continue
-        # split the lines only once from the last whitespace
-        file_path, package_names = line.rsplit(maxsplit=1)
-        for package_name in package_names.strip().split(","):
-            package_counter[package_name] += 1
+
+    with Pool(cpu_count()) as pool:
+        # with Pool(6) as pool:
+        results = pool.map(parse_line, lines)
+
+    for result in results:
+        for package_name, count in result.items():
+            package_counter[package_name] += count
 
     logging.info("Completed parsing the Contents file")
     return package_counter
